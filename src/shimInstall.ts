@@ -51,6 +51,50 @@ export function uninstallUserShim(target = defaultShimPath()): boolean {
   return true;
 }
 
+export function isNpmGlobalLifecycle(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.npm_config_global === "true";
+}
+
+export function lifecycleInstallUserShim(target?: string): void {
+  try {
+    if (!isNpmGlobalLifecycle()) return;
+    const dest = target ?? defaultShimPath();
+    try {
+      assertSafeShimTarget(dest, findRealGit());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`nwt: skip git shim (${message})`);
+      return;
+    }
+    if (fs.existsSync(dest) && !isNwtGitShim(dest)) {
+      console.log(`nwt: skip git shim (existing non-nwt git at ${dest})`);
+      return;
+    }
+    const installed = installUserShim(dest);
+    console.log(shimInstallHint(installed));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`nwt: skip git shim (${message})`);
+  }
+}
+
+export function lifecycleUninstallUserShim(target?: string): void {
+  try {
+    if (!isNpmGlobalLifecycle()) return;
+    const dest = target ?? defaultShimPath();
+    if (!fs.existsSync(dest)) return;
+    if (!isNwtGitShim(dest)) {
+      console.log(`nwt: skip git shim uninstall (not an nwt shim): ${dest}`);
+      return;
+    }
+    uninstallUserShim(dest);
+    console.log(`nwt: removed git shim at ${dest}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`nwt: skip git shim uninstall (${message})`);
+  }
+}
+
 export function shimInstallHint(shimPath: string): string {
   const dir = path.dirname(shimPath);
   const pathEnv = process.env.PATH ?? "";

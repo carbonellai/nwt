@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createBranchEverywhere, setupWorktree, worktreeAdd, worktreeList, worktreeRemove } from "./cascade";
 import { handleAfterShell, readStdinJson } from "./hook";
 import { initHost, printDiscover } from "./init";
@@ -7,11 +8,18 @@ import { handlePostCommit, handlePostMerge, handlePostRewrite, runSequenceEditor
 import { handlePreRebase, mergeNestedFromMessage } from "./owningCascade";
 import { syncOverlay } from "./overlay";
 import { pathsFor, resolveHost } from "./paths";
-import { pruneMissingNested } from "./prune";
+import { listUmbrellaWorktrees, pruneMissingNested } from "./prune";
 import { applyRules } from "./rules";
 import { findUmbrellaRoot } from "./resolve";
 import { runShimGit } from "./shimGit";
-import { installUserShim, shimInstallHint, uninstallUserShim } from "./shimInstall";
+import {
+  installUserShim,
+  lifecycleInstallUserShim,
+  lifecycleUninstallUserShim,
+  shimInstallHint,
+  uninstallUserShim,
+} from "./shimInstall";
+import { uninstallHost } from "./uninstall";
 
 function usage(): string {
   return `nwt — nested git worktrees kit
@@ -20,6 +28,7 @@ Usage:
   nwt install <project>
   nwt discover
   nwt init
+  nwt uninstall [--commit|--no-commit] [--all-worktrees]
   nwt shim-install [path]
   nwt shim-uninstall [path]
   nwt worktree add <path> [branch]
@@ -36,6 +45,10 @@ Usage:
 
 function hasFlag(args: string[], name: string): boolean {
   return args.includes(name);
+}
+
+function firstPathArg(args: string[]): string | undefined {
+  return args.find((arg) => arg !== "--" && !arg.startsWith("--"));
 }
 
 function sessionStartPayload(cwd = process.cwd()): string {
@@ -66,13 +79,21 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (cmd === "shim-install") {
-    const installed = installUserShim(rest[0]);
+    if (hasFlag(rest, "--lifecycle")) {
+      lifecycleInstallUserShim(firstPathArg(rest));
+      return 0;
+    }
+    const installed = installUserShim(firstPathArg(rest));
     console.log(shimInstallHint(installed));
     return 0;
   }
 
   if (cmd === "shim-uninstall") {
-    const removed = uninstallUserShim(rest[0]);
+    if (hasFlag(rest, "--lifecycle")) {
+      lifecycleUninstallUserShim(firstPathArg(rest));
+      return 0;
+    }
+    const removed = uninstallUserShim(firstPathArg(rest));
     console.log(removed ? "nwt: removed git shim" : "nwt: no shim to remove");
     return 0;
   }
@@ -120,6 +141,19 @@ async function main(argv: string[]): Promise<number> {
       await initHost(paths, { commit: true });
       console.log(`nwt: initialized ${root} (${loadManifest(paths).nested.length} nested repos)`);
       return 0;
+    case "uninstall":
+    case "deinit": {
+      const commit = hasFlag(rest, "--no-commit") ? false : true;
+      const roots = hasFlag(rest, "--all-worktrees")
+        ? await listUmbrellaWorktrees(root)
+        : [root];
+      for (const wt of roots) {
+        if (!fs.existsSync(path.join(wt, ".nwt", "manifest.json"))) continue;
+        await uninstallHost(pathsFor(wt), { commit });
+        console.log(`nwt: uninstalled ${wt}`);
+      }
+      return 0;
+    }
     case "prune": {
       const pruned = await pruneMissingNested(paths, { commit: true });
       console.log(`nwt: prune ${root} (${pruned.nested.length} nested repos)`);

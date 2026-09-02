@@ -38,6 +38,17 @@ export function readIgnoreFiles(workTree: string): string {
 const MARK_START = "# >>> nwt-generated";
 const MARK_END = "# <<< nwt-generated";
 
+export function stripIgnoreBlock(gitignoreText: string): string {
+  if (!gitignoreText.includes(MARK_START) || !gitignoreText.includes(MARK_END)) {
+    return gitignoreText;
+  }
+  const stripped = gitignoreText.replace(
+    new RegExp(`\\n*${MARK_START}[\\s\\S]*?${MARK_END}\\n?`),
+    "\n",
+  );
+  return `${stripped.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
 export function upsertIgnoreBlock(gitignoreText: string, blockBody: string): string {
   const block = `${MARK_START}\n${blockBody.trimEnd()}\n${MARK_END}\n`;
   if (gitignoreText.includes(MARK_START) && gitignoreText.includes(MARK_END)) {

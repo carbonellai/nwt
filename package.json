@@ -1,16 +1,17 @@
 {
   "name": "@crbn/nwt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Give multi-repo Cursor projects first-class git worktrees and a unified Changes view.",
   "type": "module",
   "engines": {
     "node": ">=18"
   },
   "bin": {
-    "nwt": "dist/nwt.mjs"
+    "nwt": "./bin/nwt.js"
   },
   "files": [
-    "dist/nwt.mjs"
+    "dist/nwt.mjs",
+    "bin/nwt.js"
   ],
   "author": {
     "name": "Luis Carbonell",
@@ -33,7 +34,9 @@
     "test": "tsx --test tests/*.test.ts",
     "pretest": "npm run build",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "if [ \"$npm_config_global\" = true ]; then node ./bin/nwt.js shim-install --lifecycle; fi",
+    "preuninstall": "if [ \"$npm_config_global\" = true ]; then node ./bin/nwt.js shim-uninstall --lifecycle; fi"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

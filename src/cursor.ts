@@ -58,9 +58,6 @@ export const GIT_SCAN_SETTINGS = {
   "terminal.integrated.env.linux": {
     PATH: "${workspaceFolder}/.nwt/bin:${env:PATH}",
   },
-  "terminal.integrated.env.windows": {
-    PATH: "${workspaceFolder}\\.nwt\\bin;${env:PATH}",
-  },
 };
 
 const STALE_HOOK_COMMANDS = new Set([
@@ -145,4 +142,98 @@ export function writeCursorKit(root: string): void {
   mergeJsonFile(hooksFile, DEFAULT_HOOKS_JSON);
   stripStaleHookCommands(hooksFile);
   mergeJsonFile(path.join(root, ".vscode", "settings.json"), GIT_SCAN_SETTINGS);
+}
+
+const NWT_HOOK_COMMANDS = new Set([
+  ".cursor/scripts/nwt-after-shell.sh",
+  ".cursor/scripts/nwt-session-start.sh",
+  ".cursor/nwt-after-shell.sh",
+  ".cursor/nwt-session-start.sh",
+]);
+
+const NWT_WORKTREE_COMMANDS = new Set(Object.values(DEFAULT_WORKTREES_JSON).flat());
+
+function stripNwtPathPrepend(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const next = value
+    .replace(/\$\{workspaceFolder\}\/\.nwt\/bin:/g, "")
+    .replace(/\$\{workspaceFolder\}\\\.nwt\\bin;/g, "");
+  if (next === "${env:PATH}" || next === "") return "";
+  return next;
+}
+
+function filterHookEntries(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.filter((item) => {
+    if (!item || typeof item !== "object") return true;
+    const command = (item as { command?: string }).command;
+    return !command || !NWT_HOOK_COMMANDS.has(command);
+  });
+}
+
+export function stripCursorKit(root: string): void {
+  const cursorDir = path.join(root, ".cursor");
+  const scriptsDir = path.join(cursorDir, "scripts");
+  for (const name of SCRIPT_NAMES) {
+    const file = path.join(scriptsDir, name);
+    if (fs.existsSync(file)) fs.rmSync(file);
+    const stale = path.join(cursorDir, name);
+    if (fs.existsSync(stale)) fs.rmSync(stale);
+  }
+
+  const hooksFile = path.join(cursorDir, "hooks.json");
+  if (fs.existsSync(hooksFile)) {
+    try {
+      const current = JSON.parse(fs.readFileSync(hooksFile, "utf8")) as { hooks?: Record<string, unknown> };
+      if (current.hooks) {
+        for (const key of Object.keys(current.hooks)) {
+          current.hooks[key] = filterHookEntries(current.hooks[key]);
+        }
+        fs.writeFileSync(hooksFile, `${JSON.stringify(current, null, 2)}\n`);
+      }
+    } catch {
+      // leave malformed user JSON
+    }
+  }
+
+  const worktreesFile = path.join(cursorDir, "worktrees.json");
+  if (fs.existsSync(worktreesFile)) {
+    try {
+      const current = JSON.parse(fs.readFileSync(worktreesFile, "utf8")) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(current)) {
+        if (!Array.isArray(value)) continue;
+        current[key] = value.filter((item) => !NWT_WORKTREE_COMMANDS.has(String(item)));
+        if (Array.isArray(current[key]) && (current[key] as unknown[]).length === 0) delete current[key];
+      }
+      fs.writeFileSync(worktreesFile, `${JSON.stringify(current, null, 2)}\n`);
+    } catch {
+      // leave malformed user JSON
+    }
+  }
+
+  const settingsFile = path.join(root, ".vscode", "settings.json");
+  if (!fs.existsSync(settingsFile)) return;
+  try {
+    const current = JSON.parse(fs.readFileSync(settingsFile, "utf8")) as Record<string, unknown>;
+    if (current["git.autoRepositoryDetection"] === false) delete current["git.autoRepositoryDetection"];
+    if (current["git.repositoryScanMaxDepth"] === 0) delete current["git.repositoryScanMaxDepth"];
+    for (const envKey of [
+      "terminal.integrated.env.osx",
+      "terminal.integrated.env.linux",
+      "terminal.integrated.env.windows",
+    ]) {
+      const env = current[envKey];
+      if (!isPlainObject(env)) continue;
+      if ("PATH" in env) {
+        const next = stripNwtPathPrepend(env.PATH);
+        if (next === undefined || next === "") delete env.PATH;
+        else env.PATH = next;
+      }
+      if (Object.keys(env).length === 0) delete current[envKey];
+      else current[envKey] = env;
+    }
+    fs.writeFileSync(settingsFile, `${JSON.stringify(current, null, 2)}\n`);
+  } catch {
+    // leave malformed user JSON
+  }
 }

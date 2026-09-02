@@ -83,3 +83,34 @@ export async function resolveNestedGitDir(root: string, gitDirRelPath: string): 
 export function nestedWorkTree(root: string, relPath: string): string {
   return absFromRel(root, relPath);
 }
+
+export async function restoreNestedGit(
+  workTree: string,
+  gitDir: string,
+  opts: { shared: boolean },
+): Promise<void> {
+  if (!pathExists(gitDir)) {
+    throw new Error(`cannot restore ${workTree}: gitdir ${gitDir} is missing`);
+  }
+  await git(["config", "--unset", "core.worktree"], { gitDir, allowFail: true });
+  const destGit = path.join(workTree, ".git");
+
+  if (opts.shared) {
+    if (!pathExists(destGit)) {
+      fs.writeFileSync(destGit, `gitdir: ${path.resolve(gitDir)}\n`);
+    }
+    return;
+  }
+
+  if (pathExists(destGit)) {
+    const stat = fs.lstatSync(destGit);
+    if (stat.isFile()) fs.rmSync(destGit);
+    else if (path.resolve(destGit) === path.resolve(gitDir)) return;
+    else return;
+  }
+
+  if (!pathExists(gitDir)) {
+    throw new Error(`cannot restore ${workTree}: gitdir disappeared`);
+  }
+  fs.renameSync(gitDir, destGit);
+}

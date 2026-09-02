@@ -17,6 +17,7 @@ import { pruneMissingNested, SKIP_PRUNE_ENV } from "../src/prune";
 import { nestedGitDir, nestedWorkTree } from "../src/relocate";
 import { runShimGit } from "../src/shimGit";
 import { assertSafeShimTarget, installUserShim, uninstallUserShim } from "../src/shimInstall";
+import { uninstallHost } from "../src/uninstall";
 
 function samePath(a: string, b: string): boolean {
   return fs.realpathSync(a) === fs.realpathSync(b);
@@ -149,7 +150,11 @@ test("nwt install copies the bundled CLI", async () => {
   const target = await tempRoot();
   await makeNested(target, "lib/child");
   await installInto(target);
-  assert.equal(fs.existsSync(path.join(target, ".nwt", "nwt.mjs")), true);
+  const bundled = path.join(target, ".nwt", "nwt.mjs");
+  const trampoline = path.join(process.cwd(), "bin", "nwt.js");
+  assert.equal(fs.existsSync(bundled), true);
+  assert.equal(fs.statSync(bundled).size, fs.statSync(kitCli).size);
+  assert.ok(fs.statSync(bundled).size > fs.statSync(trampoline).size * 10);
   assert.equal(fs.existsSync(path.join(target, ".cursor", "hooks.json")), true);
   assert.equal(fs.existsSync(path.join(target, "lib/child/.git")), false);
   assert.equal(fs.existsSync(path.join(target, ".nwt", "bin", "git")), true);
@@ -172,6 +177,7 @@ test("dist CLI prints usage without playground", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /nwt install/);
   assert.match(result.stdout, /nwt init/);
+  assert.match(result.stdout, /nwt uninstall/);
   assert.doesNotMatch(result.stdout, /playground/i);
 });
 
@@ -566,5 +572,164 @@ test("init removes leftover unused gitdirs without touching live ones", async ()
   assert.equal(fs.existsSync(leftover), false);
   assert.equal(fs.existsSync(live), true);
 });
+
+test("npm pack allowlists the CLI trampoline and bundle", () => {
+  const packed = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(packed.status, 0, packed.stderr);
+  const start = packed.stdout.indexOf("[");
+  const parsed = JSON.parse(packed.stdout.slice(start)) as { files?: { path: string }[] }[];
+  const files = new Set((parsed[0]?.files ?? []).map((file) => file.path));
+  assert.ok(files.has("package.json"));
+  assert.ok(files.has("README.md"));
+  assert.ok(files.has("dist/nwt.mjs"));
+  assert.ok(files.has("bin/nwt.js"));
+  assert.equal([...files].some((file) => file.startsWith("src/")), false);
+  assert.equal([...files].some((file) => file.startsWith("tests/")), false);
+});
+
+test("lifecycle shim-install writes and removes git only when global", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nwt-home-"));
+  temps.push(home);
+  const cli = path.join(process.cwd(), "dist", "nwt.mjs");
+  const shim = path.join(home, ".local", "bin", "git");
+  const env = { ...process.env, HOME: home };
+  delete env.NWT_SHIM_PATH;
+
+  const local = spawnSync(process.execPath, [cli, "shim-install", "--lifecycle"], {
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(local.status, 0, local.stderr);
+  assert.equal(fs.existsSync(shim), false);
+
+  const globalInstall = spawnSync(process.execPath, [cli, "shim-install", "--lifecycle"], {
+    encoding: "utf8",
+    env: { ...env, npm_config_global: "true" },
+  });
+  assert.equal(globalInstall.status, 0, globalInstall.stderr);
+  assert.equal(fs.existsSync(shim), true);
+  assert.match(fs.readFileSync(shim, "utf8"), /nwt-git-shim/);
+
+  const globalUninstall = spawnSync(process.execPath, [cli, "shim-uninstall", "--lifecycle"], {
+    encoding: "utf8",
+    env: { ...env, npm_config_global: "true" },
+  });
+  assert.equal(globalUninstall.status, 0, globalUninstall.stderr);
+  assert.equal(fs.existsSync(shim), false);
+});
+
+test("lifecycle shim-install leaves a non-nwt git alone", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nwt-foreign-"));
+  temps.push(dir);
+  const target = path.join(dir, "git");
+  fs.writeFileSync(target, "#!/bin/sh\necho foreign\n");
+  const cli = path.join(process.cwd(), "dist", "nwt.mjs");
+  const result = spawnSync(process.execPath, [cli, "shim-install", "--lifecycle", target], {
+    encoding: "utf8",
+    env: { ...process.env, npm_config_global: "true", NWT_SHIM_PATH: target },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.readFileSync(target, "utf8"), "#!/bin/sh\necho foreign\n");
+});
+
+test("nwt uninstall restores nested git dirs without removing the user git shim", async () => {
+  const root = await tempRoot();
+  await makeNested(root, "packages/a");
+  const paths = pathsFor(root);
+  fs.mkdirSync(path.join(root, ".vscode"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".vscode", "settings.json"), `${JSON.stringify({ "editor.tabSize": 2 }, null, 2)}\n`);
+  await initHost(paths, { commit: true });
+  const overlayCommit = await git(["log", "--grep", "nwt: sync nested overlay", "--format=%s"], { cwd: root });
+  assert.match(overlayCommit.stdout, /nwt: sync nested overlay/);
+
+  const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "nwt-user-shim-"));
+  temps.push(shimDir);
+  const userShim = path.join(shimDir, "git");
+  process.env.NWT_SHIM_PATH = userShim;
+  try {
+    installUserShim(userShim);
+    fs.mkdirSync(path.join(root, ".husky"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".husky", "pre-commit"), "#!/bin/sh\n");
+    await git(["config", "core.hooksPath", ".husky"], { cwd: root });
+
+    await uninstallHost(paths, { commit: true });
+
+    const nestedGit = path.join(root, "packages/a", ".git");
+    assert.equal(fs.lstatSync(nestedGit).isDirectory(), true);
+    const nestedStatus = await git(["status", "--porcelain"], { cwd: path.join(root, "packages/a") });
+    assert.equal(nestedStatus.stdout.trim(), "");
+
+    const ls = await git(["ls-files", "--", "packages/a/file.txt"], { cwd: root });
+    assert.equal(ls.stdout.trim(), "");
+    assert.equal(fs.existsSync(path.join(root, "packages/a", "file.txt")), true);
+
+    const hooksPath = await git(["config", "--get", "core.hooksPath"], { cwd: root, allowFail: true });
+    assert.equal(hooksPath.stdout.trim(), ".husky");
+    assert.equal(fs.existsSync(userShim), true);
+    assert.match(fs.readFileSync(userShim, "utf8"), /nwt-git-shim/);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(root, ".vscode", "settings.json"), "utf8")) as {
+      "editor.tabSize"?: number;
+      "git.autoRepositoryDetection"?: boolean;
+      "terminal.integrated.env.osx"?: { PATH?: string };
+    };
+    assert.equal(settings["editor.tabSize"], 2);
+    assert.equal(settings["git.autoRepositoryDetection"], undefined);
+    assert.equal(settings["terminal.integrated.env.osx"], undefined);
+    assert.equal(fs.existsSync(path.join(root, ".cursor", "scripts", "nwt-after-shell.sh")), false);
+    assert.equal(fs.existsSync(path.join(root, ".nwt", "nwt.mjs")), false);
+
+    const gitignore = fs.readFileSync(path.join(root, ".gitignore"), "utf8");
+    assert.doesNotMatch(gitignore, /nwt-generated/);
+
+    const stillOverlay = await git(["log", "--grep", "nwt: sync nested overlay", "--format=%s"], { cwd: root });
+    assert.match(stillOverlay.stdout, /nwt: sync nested overlay/);
+    const uninstallCommit = await git(["log", "-1", "--format=%s"], { cwd: root });
+    assert.equal(uninstallCommit.stdout.trim(), "nwt: uninstall");
+  } finally {
+    delete process.env.NWT_SHIM_PATH;
+  }
+});
+
+test("uninstall unsets nwt-owned core.hooksPath", async () => {
+  const root = await tempRoot();
+  await makeNested(root, "packages/a");
+  await initHost(pathsFor(root), { commit: true });
+  const before = await git(["config", "--get", "core.hooksPath"], { cwd: root });
+  assert.equal(before.stdout.trim(), ".nwt/hooks");
+  await uninstallHost(pathsFor(root), { commit: false });
+  const after = await git(["config", "--get", "core.hooksPath"], { cwd: root, allowFail: true });
+  assert.equal(after.stdout.trim(), "");
+});
+
+test("uninstall in one umbrella worktree keeps a sibling shared gitdir", async () => {
+  const root = await tempRoot();
+  await makeNested(root, "libs/sample-lib");
+  const paths = pathsFor(root);
+  await initHost(paths, { commit: true });
+  const gitDirRel = loadManifest(paths).nested[0].gitDir;
+  const gitDir = nestedGitDir(root, gitDirRel);
+  const keepWt = path.join(os.tmpdir(), `nwt-uninstall-keep-${Date.now()}`);
+  temps.push(keepWt);
+  await worktreeAdd(paths, keepWt, "keep-uninstall");
+
+  await uninstallHost(paths, { commit: true });
+
+  assert.equal(fs.existsSync(gitDir), true);
+  assert.equal(fs.existsSync(path.join(root, "libs/sample-lib", ".git")), true);
+  assert.equal(fs.existsSync(path.join(keepWt, "libs/sample-lib", "file.txt")), true);
+  assert.equal(fs.existsSync(path.join(keepWt, "libs/sample-lib", ".git")), false);
+  const keepManifest = loadManifest(pathsFor(keepWt));
+  assert.equal(keepManifest.nested.some((entry) => entry.path === "libs/sample-lib"), true);
+  const keepStatus = await runShimGit(["status", "--porcelain"], {
+    cwd: path.join(keepWt, "libs/sample-lib"),
+    inherit: false,
+  });
+  assert.equal(keepStatus.code, 0, keepStatus.stderr);
+});
+
 
 

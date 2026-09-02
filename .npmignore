@@ -1,3 +1,5 @@
 *
 !dist/
 !dist/nwt.mjs
+!bin/
+!bin/nwt.js

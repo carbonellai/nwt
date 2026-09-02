@@ -15,7 +15,7 @@ flowchart LR
   Overlay --> Changes["Agents Changes"]
 ```
 
-Cursor Agents Changes follows the workspace **root** git tree. nwt relocates nested gitdirs under `.nwt/git/` and **leaves nested `.git` off disk**, then snapshots nested HEAD into the umbrella index. Do not put gitfiles back in nested trees.
+Cursor Agents Changes follows the workspace **root** git tree. nwt relocates nested gitdirs under `.nwt/git/` and **leaves nested `.git` off disk**, then snapshots nested HEAD into the umbrella index. Do not put gitfiles back in nested trees (except `nwt uninstall`).
 
 ## Setup
 
@@ -23,10 +23,19 @@ Cursor Agents Changes follows the workspace **root** git tree. nwt relocates nes
 npm i -g @crbn/nwt
 cd /path/to/umbrella
 nwt init
-nwt shim-install   # ~/.local/bin/git; never /usr/bin/git
 ```
 
-Hosts need Node 18+ and Git; they do not need to be Node projects.
+`npm i -g` also writes `~/.local/bin/git` (nwt marker; never `/usr/bin/git`). Put `~/.local/bin` ahead of `/usr/bin` on `PATH`.
+
+If `nwt` is not found after install, add npm’s global bin to `PATH` or use `npx`:
+
+```sh
+export PATH="$(npm prefix -g)/bin:$PATH"
+# or:
+npx @crbn/nwt init
+```
+
+Do not run `npx nwt`. Hosts need Node 18+ and Git; they do not need to be Node projects.
 
 `nwt init` discovers nested clones, relocates gitdirs, merges Cursor `hooks.json` / `worktrees.json`, pins git scan settings, vendors `.nwt/nwt.mjs` for hooks, and builds the overlay.
 
@@ -43,7 +52,7 @@ flowchart TD
   Umbrella --> Split["commit / merge / rebase by owning path"]
 ```
 
-Install the user-level shim ahead of `/usr/bin`. Open a new terminal. `GIT_DIR` / `--git-dir` pass through. Real git is `NWT_REAL_GIT` or the first non-shim `git` on PATH.
+The user-level shim is installed with the global CLI. Open a new terminal. `GIT_DIR` / `--git-dir` pass through. Real git is `NWT_REAL_GIT` or the first non-shim `git` on PATH.
 
 Umbrella `commit`, `commit --amend`, `merge`, and `rebase` land in the clone that owns the files. Nested git never merges or rebases the umbrella. Overlay refresh follows.
 
@@ -52,8 +61,9 @@ Umbrella `commit`, `commit --amend`, `merge`, and `rebase` land in the clone tha
 ```sh
 nwt git status
 nwt git -C packages/a status
-nwt shim-uninstall
 ```
+
+If npm was installed with `--ignore-scripts`, run `nwt shim-install` once (and `nwt shim-uninstall` later).
 
 ## Cascade
 
@@ -81,11 +91,23 @@ Opportunistic: git shim, `afterShell` (any command), `sessionStart`, `nwt init` 
 
 Prune is **worktree-local** for overlay/shim/manifest. The gitdir is shared and is removed only when no umbrella worktree still has that checkout. `NWT_SKIP_PRUNE=1` during `worktree add` / `setup-worktree`.
 
+## Uninstall
+
+Restores nested `.git` **directories** in each umbrella worktree. Does not rewrite overlay history, delete nested repos, or remove `~/.local/bin/git`.
+
+```sh
+nwt uninstall                 # each umbrella; or node .nwt/nwt.mjs uninstall
+npm uninstall -g @crbn/nwt    # also drops ~/.local/bin/git if it’s nwt’s
+```
+
+If the global CLI is removed first: terminal `git` is no longer intercepted; Cursor `.nwt/bin` still is; hosts stay nwt-shaped until `node .nwt/nwt.mjs uninstall`.
+
 ## Commands
 
 ```sh
 nwt discover
 nwt init
+nwt uninstall
 nwt prune
 nwt shim-install
 nwt worktree add ../app-feature-x feature-x
