@@ -1,0 +1,44 @@
+{
+  "name": "@crbn/nwt",
+  "version": "0.1.0",
+  "description": "Give multi-repo Cursor projects first-class git worktrees and a unified Changes view.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "nwt": "dist/nwt.mjs"
+  },
+  "files": [
+    "dist/nwt.mjs"
+  ],
+  "author": {
+    "name": "Luis Carbonell",
+    "email": "120284210+theluiscarbonell@users.noreply.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carbonellai/nwt.git"
+  },
+  "homepage": "https://github.com/carbonellai/nwt#readme",
+  "bugs": {
+    "url": "https://github.com/carbonellai/nwt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/nwt.mjs --banner:js=\"#!/usr/bin/env node\" && chmod +x dist/nwt.mjs",
+    "nwt": "tsx src/cli.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "pretest": "npm run build",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "esbuild": "^0.25.4",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

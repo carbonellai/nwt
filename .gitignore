@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.nwt/
+.cursor/
+.vscode/
+*.tsbuildinfo
+.DS_Store
