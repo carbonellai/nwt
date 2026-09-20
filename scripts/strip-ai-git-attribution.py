@@ -5,6 +5,8 @@ Usage:
   strip-ai-git-attribution.py --commit-msg <file>
   strip-ai-git-attribution.py --check-pr
   strip-ai-git-attribution.py --self-test
+
+The PR check reads title and body from the GitHub event, not from source files.
 """
 
 from __future__ import annotations
